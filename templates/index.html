@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Real-Time Public Transport Tracking</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.3/dist/leaflet.css"
+      crossorigin=""/>
+</head>
+<body>
+    <h1>Real-Time Public Transport Tracking - Amritsar</h1>
+    <div id="map" style="height: 500px;"></div>
+    <div id="info">
+        <h2>Bus List</h2>
+        <div id="bus-list">Loading bus data...</div>
+        <h2>Routes</h2>
+        <ul id="route-list"></ul>
+        <h2>Stops</h2>
+        <ul id="stop-list"></ul>
+        <h2>Fare Calculator</h2>
+        <div id="fare-calculator">
+            <select id="start-stop">
+                <option value="">Select Start Stop</option>
+            </select>
+            <select id="end-stop">
+                <option value="">Select End Stop</option>
+            </select>
+            <button onclick="calculateFare()">Calculate Fare</button>
+            <p id="fare-result"></p>
+        </div>
+        <h2>AI Guide</h2>
+        <div id="ai-guide">
+            <input type="text" id="query" placeholder="Ask for journey assistance..." />
+            <button onclick="getGuidance()">Get Guidance</button>
+            <p id="guidance-result"></p>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.3/dist/leaflet.js"
+      crossorigin=""></script>
+    <script>
+        let map = L.map('map').setView([31.6330, 74.8720], 13);
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '© OpenStreetMap'
+        }).addTo(map);
+
+        let busMarkers = {};
+        let routeColors = {};
+        let trafficLayers = [];
+        let stopsData = [];
+
+        async function fetchBusData() {
+            try {
+                const response = await fetch('/api/buses');
+                const buses = await response.json();
+                const busListDiv = document.getElementById('bus-list');
+                if (buses.length === 0) {
+                    busListDiv.innerHTML = '<p>No buses currently available.</p>';
+                    return;
+                }
+                let html = '<ul>';
+                buses.forEach(bus => {
+                    html += `<li><strong>${bus.name}</strong>: Latitude ${bus.lat.toFixed(6)}, Longitude ${bus.lng.toFixed(6)}, Crowdedness: ${bus.crowdedness}%</li>`;
+                    if (busMarkers[bus.id]) {
+                        busMarkers[bus.id].setLatLng([bus.lat, bus.lng]);
+                    } else {
+                        let color = routeColors[bus.route_id] || 'blue';
+                        let marker = L.circleMarker([bus.lat, bus.lng], {
+                            radius: 8,
+                            fillColor: color,
+                            color: '#000',
+                            weight: 1,
+                            opacity: 1,
+                            fillOpacity: 0.8
+                        }).addTo(map);
+                        marker.on('click', async () => {
+                            try {
+                                const response = await fetch(`/api/bus_details/${bus.id}`);
+                                const details = await response.json();
+                                marker.bindPopup(`
+                                    <strong>${details.name}</strong><br>
+                                    Location: ${details.current_location.lat.toFixed(6)}, ${details.current_location.lng.toFixed(6)}<br>
+                                    Crowdedness: ${details.crowdedness}%<br>
+                                    Estimated arrival: ${details.estimated_arrival_minutes} minutes<br>
+                                    Closest stop: ${details.closest_stop}<br>
+                                    Final stop: ${details.final_stop}<br>
+                                    Fare: ₹${details.fare}
+                                `).openPopup();
+                            } catch (error) {
+                                marker.bindPopup('Error loading details').openPopup();
+                            }
+                        });
+                        busMarkers[bus.id] = marker;
+                    }
+                });
+                html += '</ul>';
+                busListDiv.innerHTML = html;
+            } catch (error) {
+                document.getElementById('bus-list').innerHTML = '<p>Error loading bus data.</p>';
+            }
+        }
+
+        async function fetchRoutes() {
+            try {
+                const response = await fetch('/api/routes');
+                const routes = await response.json();
+                const routeList = document.getElementById('route-list');
+                routeList.innerHTML = '';
+                routes.forEach(route => {
+                    routeColors[route.id] = route.color;
+                    let li = document.createElement('li');
+                    li.textContent = route.name;
+                    li.style.color = route.color;
+                    routeList.appendChild(li);
+                });
+            } catch (error) {
+                document.getElementById('route-list').innerHTML = '<li>Error loading routes.</li>';
+            }
+        }
+
+        async function fetchStops() {
+            try {
+                const response = await fetch('/api/stops');
+                const stops = await response.json();
+                stopsData = stops;
+                const stopList = document.getElementById('stop-list');
+                stopList.innerHTML = '';
+                stops.forEach(stop => {
+                    let li = document.createElement('li');
+                    li.textContent = stop.name;
+                    stopList.appendChild(li);
+                    L.marker([stop.lat, stop.lng]).addTo(map).bindPopup(stop.name);
+                });
+                populateStops();
+            } catch (error) {
+                document.getElementById('stop-list').innerHTML = '<li>Error loading stops.</li>';
+            }
+        }
+
+        async function fetchTraffic() {
+            try {
+                const response = await fetch('/api/traffic');
+                const traffic = await response.json();
+                // Clear previous traffic layers
+                trafficLayers.forEach(layer => map.removeLayer(layer));
+                trafficLayers = [];
+                traffic.forEach(t => {
+                    let polyline = L.polyline([[t.start_lat, t.start_lng], [t.end_lat, t.end_lng]], {
+                        color: 'red',
+                        weight: 5,
+                        opacity: 0.7
+                    }).addTo(map).bindPopup(`Traffic delay: ${t.delay_minutes} minutes`);
+                    trafficLayers.push(polyline);
+                });
+            } catch (error) {
+                console.error('Error loading traffic data:', error);
+            }
+        }
+
+        function populateStops() {
+            const startSelect = document.getElementById('start-stop');
+            const endSelect = document.getElementById('end-stop');
+            startSelect.innerHTML = '<option value="">Select Start Stop</option>';
+            endSelect.innerHTML = '<option value="">Select End Stop</option>';
+            stopsData.forEach(stop => {
+                let option1 = document.createElement('option');
+                option1.value = stop.id;
+                option1.textContent = stop.name;
+                startSelect.appendChild(option1);
+                let option2 = document.createElement('option');
+                option2.value = stop.id;
+                option2.textContent = stop.name;
+                endSelect.appendChild(option2);
+            });
+        }
+
+        async function calculateFare() {
+            const startId = document.getElementById('start-stop').value;
+            const endId = document.getElementById('end-stop').value;
+            if (!startId || !endId) {
+                document.getElementById('fare-result').textContent = 'Please select both stops.';
+                return;
+            }
+            try {
+                const response = await fetch('/api/fares');
+                const fares = await response.json();
+                // Find common route
+                const startStop = stopsData.find(s => s.id == startId);
+                const endStop = stopsData.find(s => s.id == endId);
+                const commonRoutes = startStop.route_ids.filter(r => endStop.route_ids.includes(r));
+                if (commonRoutes.length === 0) {
+                    document.getElementById('fare-result').textContent = 'No direct route between selected stops.';
+                    return;
+                }
+                const fare = fares.find(f => f.route_id == commonRoutes[0]).fare;
+                document.getElementById('fare-result').textContent = `Fare: ₹${fare}`;
+            } catch (error) {
+                document.getElementById('fare-result').textContent = 'Error calculating fare.';
+            }
+        }
+
+        function getGuidance() {
+            const query = document.getElementById('query').value.toLowerCase();
+            let result = '';
+            if (query.includes('nearest bus stop')) {
+                result = 'The nearest bus stop is Amritsar Railway Station.';
+            } else if (query.includes('bus to golden temple')) {
+                result = 'Take Bus 101 or 102 from Railway Station.';
+            } else if (query.includes('crowded')) {
+                result = 'Check bus crowdedness on the map by clicking on a bus.';
+            } else {
+                result = 'Please ask about bus stops, routes, or fares.';
+            }
+            document.getElementById('guidance-result').textContent = result;
+        }
+
+        // Initial fetches
+        fetchRoutes();
+        fetchStops();
+        fetchTraffic();
+        fetchBusData();
+
+        // Update every 5 seconds
+        setInterval(fetchBusData, 5000);
+    </script>
+</body>
+</html>
