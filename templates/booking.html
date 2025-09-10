@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Book Ticket</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>Book Ticket</h1>
+        {% if confirmation %}
+            <p>Booking confirmed for {{ bus['route'] }} at {{ bus['departure_time'] }}!</p>
+            <a href="{{ url_for('index') }}">Back to Home</a>
+        {% else %}
+            {% if error %}
+                <p class="error">{{ error }}</p>
+            {% endif %}
+            <p>Route: {{ bus['route'] }}</p>
+            <p>Departure: {{ bus['departure_time'] }}</p>
+            <p>Seats Available: {{ bus['seats_available'] }}</p>
+            <form method="POST">
+                <button type="submit">Confirm Booking</button>
+            </form>
+            <a href="{{ url_for('index') }}">Back to Home</a>
+        {% endif %}
+    </div>
+</body>
+</html>

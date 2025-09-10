@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Panel</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>Admin Panel</h1>
+        <h2>Add New Bus</h2>
+        <form method="POST">
+            <label>Route: <input type="text" name="route" placeholder="e.g., Bangalore-Chennai" required></label>
+            <label>Departure Time: <input type="datetime-local" name="departure_time" required></label>
+            <label>Seats: <input type="number" name="seats" required></label>
+            <button type="submit">Add Bus</button>
+        </form>
+        <h2>Current Buses</h2>
+        <ul>
+            {% for bus in buses %}
+                <li>{{ bus['route'] }} at {{ bus['departure_time'] }} ({{ bus['seats_available'] }} seats)</li>
+            {% endfor %}
+        </ul>
+        <a href="{{ url_for('index') }}">Back to Home</a>
+    </div>
+</body>
+</html>

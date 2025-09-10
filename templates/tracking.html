@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Track Bus</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+</head>
+<body>
+    <div class="container">
+        <h1>Track Bus: {{ bus['route'] }}</h1>
+        <div id="map" style="height: 400px;"></div>
+        <p>Last Known Location: 
+            {% if location %}
+                Latitude: {{ location['latitude'] }}, Longitude: {{ location['longitude'] }}
+            {% else %}
+                No location data available
+            {% endif %}
+        </p>
+        <a href="{{ url_for('index') }}">Back to Home</a>
+    </div>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="{{ url_for('static', filename='scripts.js') }}"></script>
+    <script>
+        const busId = {{ bus['id'] }};
+        initializeMap({{ location['latitude'] if location else 12.9716 }}, {{ location['longitude'] if location else 77.5946 }});
+    </script>
+</body>
+</html>
