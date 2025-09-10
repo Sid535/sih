@@ -7,7 +7,7 @@
 - [ ] Test map view and real-time updates
 - [ ] Verify routes and stops display
 - [x] Add simulated data for fares, crowdedness, and traffic in app.py
-- [x] Add new API endpoints in app.py: /api/fares, /api/traffic, /api/bus_details/<id>
+- [x] Add new API endpoints in app.py: /api/fares, /api/traffic, /api/bus_details/
 - [x] Implement arrival time estimation logic in app.py
 - [x] Enhance bus markers in index.html with click events and detailed popups
 - [x] Add traffic visualization on map in index.html
