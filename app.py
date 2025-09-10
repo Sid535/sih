@@ -1,13 +1,20 @@
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify
+import random
 import sqlite3
 import time
 
 app = Flask(__name__)
-app.secret_key = 'your-secret-key'  # Replace with a secure key in production
+app.secret_key = 'your-secret-key'
+
+# --- START: NEW - In-memory state for bus simulation ---
+# This dictionary will store the current progress of each bus.
+# Format: { bus_id: {'segment_index': 0, 'fraction': 0.0} }
+bus_simulation_state = {}
+# --- END: NEW ---
 
 # Database connection
 def get_db_connection():
-    conn = sqlite3.connect('database.db')
+    conn = sqlite3.connect('database.db', check_same_thread=False) # Added check_same_thread for state management
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -40,13 +47,39 @@ def init_db():
             last_updated INTEGER,
             FOREIGN KEY (bus_id) REFERENCES buses(id)
         );
+        CREATE TABLE IF NOT EXISTS route_points (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            route_name TEXT NOT NULL,
+            point_order INTEGER NOT NULL,
+            latitude REAL NOT NULL,
+            longitude REAL NOT NULL
+        );
     ''')
     # Sample bus data
-    conn.executescript('''
-        INSERT OR IGNORE INTO buses (route, departure_time, seats_available)
-        VALUES ('Bangalore-Chennai', '2025-09-11 08:00', 30),
-               ('Chennai-Bangalore', '2025-09-11 10:00', 25);
-    ''')
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM buses")
+    if cur.fetchone()[0] == 0:
+        conn.executescript('''
+            INSERT INTO buses (id, route, departure_time, seats_available)
+            VALUES (1, 'Bangalore-Chennai', '2025-09-11 08:00', 30),
+                   (2, 'Chennai-Bangalore', '2025-09-11 10:00', 25);
+            
+            -- START: SAMPLE ROUTE DATA --
+            -- Points for Bangalore to Chennai
+            INSERT INTO route_points (route_name, point_order, latitude, longitude) VALUES
+            ('Bangalore-Chennai', 1, 12.9716, 77.5946), -- Bangalore
+            ('Bangalore-Chennai', 2, 12.9141, 77.9944), -- Hosur
+            ('Bangalore-Chennai', 3, 12.6935, 78.4839), -- Vellore
+            ('Bangalore-Chennai', 4, 13.0827, 80.2707); -- Chennai
+
+            -- Points for Chennai to Bangalore (reverse)
+            INSERT INTO route_points (route_name, point_order, latitude, longitude) VALUES
+            ('Chennai-Bangalore', 1, 13.0827, 80.2707), -- Chennai
+            ('Chennai-Bangalore', 2, 12.6935, 78.4839), -- Vellore
+            ('Chennai-Bangalore', 3, 12.9141, 77.9944), -- Hosur
+            ('Chennai-Bangalore', 4, 12.9716, 77.5946); -- Bangalore
+            -- END: SAMPLE ROUTE DATA --
+        ''')
     conn.commit()
     conn.close()
 
@@ -56,8 +89,8 @@ init_db()
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST':
-        from_city = request.form['from_city']
-        to_city = request.form['to_city']
+        from_city = request.form['from_city'].strip()
+        to_city = request.form['to_city'].strip()
         conn = get_db_connection()
         buses = conn.execute(
             'SELECT * FROM buses WHERE route LIKE ?', (f'{from_city}-{to_city}',)
@@ -139,24 +172,93 @@ def booking_confirmation(bus_id):
 def track(bus_id):
     conn = get_db_connection()
     bus = conn.execute('SELECT * FROM buses WHERE id = ?', (bus_id,)).fetchone()
-    location = conn.execute('SELECT * FROM bus_locations WHERE bus_id = ?', (bus_id,)).fetchone()
+    
+    # Fetch the location row
+    location_row = conn.execute('SELECT * FROM bus_locations WHERE bus_id = ?', (bus_id,)).fetchone()
+    
+    # Convert the sqlite3.Row object to a dictionary, or None if no location exists
+    location = dict(location_row) if location_row else None
+    
+    # Fetch all points for the bus's route
+    route_points_raw = conn.execute(
+        'SELECT latitude, longitude FROM route_points WHERE route_name = ? ORDER BY point_order',
+        (bus['route'],)
+    ).fetchall()
+    
+    # Convert the raw points into a list of [lat, lng] lists for JavaScript
+    route_points = [[point['latitude'], point['longitude']] for point in route_points_raw]
+    
     conn.close()
-    return render_template('tracking.html', bus=bus, location=location)
+    
+    # Pass the bus, its location, and the route path to the template
+    return render_template('tracking.html', bus=bus, location=location, route_points=route_points)
 
-# Simulate bus location updates (for demo)
+# Bus location simulation with progressive movement
 @app.route('/update_location/<int:bus_id>')
 def update_location(bus_id):
-    import random
-    latitude = 12.9716 + random.uniform(-0.1, 0.1)  # Around Bangalore
-    longitude = 77.5946 + random.uniform(-0.1, 0.1)
+    global bus_simulation_state
+    
+    # Initialize state for the bus if it's not already being tracked
+    if bus_id not in bus_simulation_state:
+        bus_simulation_state[bus_id] = {
+            "segment_index": 0,
+            "fraction": 0.0
+        }
+
+    state = bus_simulation_state[bus_id]
+    
     conn = get_db_connection()
+    bus = conn.execute('SELECT * FROM buses WHERE id = ?', (bus_id,)).fetchone()
+    
+    points_raw = conn.execute(
+        'SELECT latitude, longitude FROM route_points WHERE route_name = ? ORDER BY point_order', 
+        (bus['route'],)
+    ).fetchall()
+    points = [[p['latitude'], p['longitude']] for p in points_raw]
+
+    if len(points) > 1:
+        # --- SPEED CONTROL ---
+        # Increase for a faster bus, decrease for a slower bus.
+        # This is the percentage of a route segment to travel per update.
+        step = 0.1  # (i.e., 10% of the segment)
+        #To make the bus move slower (cover less distance at once), make the step value smaller (e.g., step = 0.05).
+        #To make it move faster, make the step value larger (e.g., step = 0.2).
+        
+        # Move the bus forward by the step amount
+        state['fraction'] += step
+        
+        # If bus completes a segment, move to the next one
+        if state['fraction'] >= 1.0:
+            state['fraction'] = 0.0
+            state['segment_index'] += 1
+            
+            # If bus completes the whole route, loop back to the start (for demo)
+            if state['segment_index'] >= len(points) - 1:
+                state['segment_index'] = 0
+
+        # Get the current segment's start and end points
+        current_segment = state['segment_index']
+        start_point = points[current_segment]
+        end_point = points[current_segment + 1]
+
+        # Calculate the new position based on progress (fraction)
+        fraction = state['fraction']
+        lat = start_point[0] + (end_point[0] - start_point[0]) * fraction
+        lng = start_point[1] + (end_point[1] - start_point[1]) * fraction
+
+    else: # Fallback for routes with less than 2 points
+        lat = points[0][0] if points else 12.9716
+        lng = points[0][1] if points else 77.5946
+
+    # Update the database with the new location
     conn.execute(
         'INSERT OR REPLACE INTO bus_locations (bus_id, latitude, longitude, last_updated) VALUES (?, ?, ?, ?)',
-        (bus_id, latitude, longitude, int(time.time()))
+        (bus_id, lat, lng, int(time.time()))
     )
     conn.commit()
     conn.close()
-    return jsonify({'latitude': latitude, 'longitude': longitude})
+    
+    return jsonify({'latitude': lat, 'longitude': lng})
 
 # Admin panel
 @app.route('/admin', methods=['GET', 'POST'])
@@ -181,7 +283,7 @@ def admin():
 # Logout route
 @app.route('/logout')
 def logout():
-    session.pop('user_id', None)  # Remove user_id from session
+    session.pop('user_id', None)
     return redirect(url_for('index'))
 
 if __name__ == '__main__':

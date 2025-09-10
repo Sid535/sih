@@ -3,28 +3,89 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Track Bus</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <title>Track Bus {{ bus.route }}</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; text-align: center; }
+        .container { max-width: 800px; margin: auto; }
+        h1 { color: #333; }
+        /* Set a height for the map container */
+        #map { height: 500px; width: 100%; border: 1px solid #ccc; margin-top: 20px; margin-bottom: 20px; }
+        a { color: #007bff; text-decoration: none; }
+    </style>
 </head>
 <body>
     <div class="container">
-        <h1>Track Bus: {{ bus['route'] }}</h1>
-        <div id="map" style="height: 400px;"></div>
-        <p>Last Known Location: 
-            {% if location %}
-                Latitude: {{ location['latitude'] }}, Longitude: {{ location['longitude'] }}
-            {% else %}
-                No location data available
-            {% endif %}
-        </p>
+        <h1>Live Tracking for Bus: {{ bus.route }} 🗺️</h1>
+        <p>Departure: {{ bus.departure_time }}</p>
+
+        <div id="map"></div>
         <a href="{{ url_for('index') }}">Back to Home</a>
     </div>
+
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="{{ url_for('static', filename='scripts.js') }}"></script>
+
     <script>
-        const busId = {{ bus['id'] }};
-        initializeMap({{ location['latitude'] if location else 12.9716 }}, {{ location['longitude'] if location else 77.5946 }});
+        // --- 1. Get data from Flask backend ---
+        // Use 'tojson' filter to safely pass Python data to JavaScript
+        const initialLocation = {{ location|tojson }};
+        const routePoints = {{ route_points|tojson }};
+        const busId = {{ bus.id }};
+
+        // --- 2. Initialize the Map ---
+        // Set the map's initial center to the first point of the route or a default
+        const mapCenter = routePoints.length > 0 ? routePoints[0] : [12.9716, 77.5946];
+        const map = L.map('map').setView(mapCenter, 8);
+
+        // Add a tile layer from OpenStreetMap (free map provider)
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        }).addTo(map);
+
+        // --- 3. Draw the Bus Route Path ---
+        if (routePoints.length > 0) {
+            // Create a polyline (a line with multiple points) from the route coordinates
+            const polyline = L.polyline(routePoints, { color: 'blue' }).addTo(map);
+            // Adjust the map view to fit the entire route
+            map.fitBounds(polyline.getBounds());
+        }
+
+        // --- 4. Add and Manage the Bus Marker ---
+        let busMarker = null;
+        if (initialLocation) {
+            var busIcon = L.icon({
+                iconUrl: 'https://img.icons8.com/color/48/000000/bus.png',
+                iconSize: [38, 38],
+            });
+            busMarker = L.marker([initialLocation.latitude, initialLocation.longitude], {icon: busIcon}).addTo(map)
+                .bindPopup(`<b>Bus: ${busId}</b><br>Live Location.`)
+                .openPopup();
+        }
+
+        // --- 5. Set up Live Updates ---
+        async function updateBusLocation() {
+            try {
+                // This will call your simulation endpoint to get a new random location along the path
+                const response = await fetch(`/update_location/${busId}`);
+                if (!response.ok) throw new Error('Network response was not ok');
+                const newLocation = await response.json();
+
+                const newLatLng = [newLocation.latitude, newLocation.longitude];
+
+                if (busMarker) {
+                    busMarker.setLatLng(newLatLng);
+                } else {
+                    busMarker = L.marker(newLatLng).addTo(map)
+                        .bindPopup(`<b>Bus: ${busId}</b><br>Live Location.`)
+                        .openPopup();
+                }
+            } catch (error) {
+                console.error("Failed to fetch bus location:", error);
+            }
+        }
+
+        // Call the update function every 5 seconds (5000 milliseconds)
+        setInterval(updateBusLocation, 5000);
     </script>
 </body>
 </html>
